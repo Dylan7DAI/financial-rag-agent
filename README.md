@@ -111,4 +111,4 @@ python -m evals.p2_eval
 
 已启动真实服务时，在前端目录运行 `npm run test:live` 核对全部 PDF、实际检索、原文 SHA256、重命名和布局；`npm run test:integration` 验证完整 Agent/生成/引用链路，会调用配置中的模型并留下独立验收会话。
 
-详见 [整合说明](product/Integration.md) 与 [单一知识库接口](product/Single_Knowledge_Base.md)。项目基于 [qndydc/financial-rag-agent](https://github.com/qndydc/financial-rag-agent) 延续开发，保留原许可证。
+接口模型与参数见本机后端的 `/docs`。项目基于 [qndydc/financial-rag-agent](https://github.com/qndydc/financial-rag-agent) 延续开发，保留原许可证。

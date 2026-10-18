@@ -60,7 +60,5 @@ runtime/
 金融RAG简历逐句三问.md
 docker/frontend/test-artifacts/
 *.sqlite3*
-# Local planning and historical milestone notes; publish current integration docs.
-product/*
-!product/Integration.md
-!product/Single_Knowledge_Base.md
+# Local product planning and process documents.
+product/
