@@ -23,6 +23,7 @@ class ModelConfig:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gpt-3.5-turbo")
+    LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "")
 #####################################################################################还没有配置本地大模型
     # 本地大模型配置（后期扩展）
     LOCAL_LLM_PATH = os.getenv("LOCAL_LLM_PATH", "")

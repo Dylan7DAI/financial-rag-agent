@@ -68,13 +68,15 @@ CHAT_USER_PROMPT = """
 """
 
 
-def build_answer_node(history_manager):
+def build_answer_node(history_manager, *, llm_factory=get_llm):
     """
     answer_node 内部自行调用 history_manager 获取相关 memory，
     不依赖 state 中额外传 memory_context。
     """
 
     def answer_node(state: AgentState) -> Dict:
+        if state.get("prepare_only"):
+            return {}  # v2 streams and validates the final answer before committing history
         user_input = state["user_input"]
         intent = state.get("intent", "rag_qa")
         session_id = state.get("session_id", "")
@@ -83,7 +85,7 @@ def build_answer_node(history_manager):
         rewritten_query = state.get("rewritten_query", "")
         structured_query = state.get("structured_query", {}) or {}
 
-        llm = get_llm()
+        llm = llm_factory()
 
         # answer阶段用于找相关memory的query，优先使用 rewrite 结果
         memory_query = _choose_memory_query(

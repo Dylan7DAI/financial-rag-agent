@@ -58,6 +58,10 @@ class ChatHistoryManager:
         """清除指定会话的所有历史。"""
         self._sessions.pop(session_id, None)
 
+    def replace(self, session_id: str, messages: List[BaseMessage]) -> None:
+        """Restore authoritative persisted complete turns before a versioned request."""
+        self._sessions[session_id] = list(messages[-self.max_turns * 2:])
+
     def clear_all(self) -> None:
         """清除所有会话历史。"""
         self._sessions.clear()

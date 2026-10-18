@@ -12,7 +12,11 @@ env
 dataset
 tmp
 logs
+runtime
 evaluation
+**/test-artifacts
+**/test-results
+**/playwright-report
 **/ocr_models
 **/reranker_trainer
 **/bm25_*.pkl

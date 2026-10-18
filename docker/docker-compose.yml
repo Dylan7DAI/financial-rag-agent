@@ -9,18 +9,23 @@ services:
       RAW_PDF_DIR: /app/dataset/raw_pdf
       VECTOR_STORE_DIR: /app/dataset/vector_store
       HF_HOME: /models/huggingface
+      CHAT_DB_PATH: /app/runtime/chat.sqlite3
+      PLATFORM_ROOT: /app/runtime
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ../dataset:/app/dataset
+      - ../dataset:/app/dataset:ro
       - model-cache:/models/huggingface
+      - ../runtime:/app/runtime
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
+    environment:
+      API_PROXY_TARGET: http://backend:8000
     depends_on:
       - backend
 

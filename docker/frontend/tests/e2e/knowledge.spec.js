@@ -1,0 +1,30 @@
+import {test,expect} from '@playwright/test'
+
+test.beforeEach(async({context},info)=>context.setExtraHTTPHeaders({'x-ui-fixture':info.testId}))
+
+for(const width of [1440,390])test(`${width}px single KB lists all PDFs and persists rename without login`,async({page})=>{
+  await page.setViewportSize({width,height:900})
+  const requests=[],errors=[]
+  page.on('request',r=>{if(r.url().includes('/api/v2/'))requests.push(r.url())})
+  page.on('pageerror',e=>errors.push(e.message))
+  await page.goto('/')
+  await page.getByRole('button',{name:'知识库',exact:true}).click()
+  await expect(page.locator('.document-table tbody tr')).toHaveCount(1)
+  await expect(page.locator('.document-table')).toContainText('已参与 RAG')
+  await expect(page.getByRole('button',{name:/上传|新建知识库|成员|授权|登录|退出/})).toHaveCount(0)
+  await page.getByRole('button',{name:'重命名知识库'}).click()
+  await expect(page.getByLabel('知识库名称',{exact:true})).toBeFocused()
+  await page.getByLabel('知识库名称',{exact:true}).fill('  唯一研报知识库  ')
+  await page.getByRole('button',{name:'保存名称',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'唯一研报知识库',exact:true})).toBeVisible()
+  await page.reload()
+  await page.getByRole('button',{name:'知识库',exact:true}).click()
+  await expect(page.getByRole('heading',{name:'唯一研报知识库',exact:true})).toBeVisible()
+  await page.getByRole('button',{name:'重命名知识库'}).click()
+  await page.getByLabel('知识库名称',{exact:true}).fill('未保存')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('heading',{name:'唯一研报知识库',exact:true})).toBeVisible()
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true)
+  expect(requests.some(url=>/auth|users|members|acl/.test(url))).toBe(false)
+  expect(errors).toEqual([])
+})

@@ -24,7 +24,7 @@ sub_queries 必须包含 1 到 3 个非空字符串。
 """
 
 
-def recovery_node(state: AgentState) -> Dict:
+def recovery_node(state: AgentState, *, llm_factory=get_llm) -> Dict:
     observation = state.get("last_observation", {}) or {}
     error_type = observation.get("error_type")
     tool = observation.get("tool", "")
@@ -49,9 +49,9 @@ def recovery_node(state: AgentState) -> Dict:
     )
 
     if can_repair:
-        return _recover_with_llm(state, mode="repair")
+        return _recover_with_llm(state, mode="repair", llm_factory=llm_factory)
     if can_generalize:
-        return _recover_with_llm(state, mode="generalize")
+        return _recover_with_llm(state, mode="generalize", llm_factory=llm_factory)
 
     reason = friendly_error_message(observation)
     if is_useless_retrieval:
@@ -67,7 +67,7 @@ def recovery_node(state: AgentState) -> Dict:
     }
 
 
-def _recover_with_llm(state: AgentState, mode: str) -> Dict:
+def _recover_with_llm(state: AgentState, mode: str, *, llm_factory=get_llm) -> Dict:
     user_input = (state.get("user_input") or "").strip()
     old_query = state.get("structured_query", {}) or {}
     observation = state.get("last_observation", {}) or {}
@@ -98,7 +98,7 @@ def _recover_with_llm(state: AgentState, mode: str) -> Dict:
             )
         ),
     ]
-    llm = get_llm()
+    llm = llm_factory()
 
     def invoke_and_validate(messages):
         response = llm.invoke(messages)

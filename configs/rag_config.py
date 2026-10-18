@@ -43,6 +43,8 @@ class RagConfig:
     # 向量召回数量 & 阈值
     VECTOR_SEARCH_TOP_K = 10
     SCORE_THRESHOLD = 0.1
+    # Historical judge heuristic, NOT a calibrated correctness probability.
+    JUDGE_MIN_SCORE = float(os.getenv('RAG_JUDGE_MIN_SCORE', '0.3'))
     # BM25 召回数量
     BM25_SEARCH_TOP_K = 10
     # 最终融合后返回给 LLM 的 chunk 数量

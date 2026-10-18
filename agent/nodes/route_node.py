@@ -45,7 +45,7 @@ def route_node(state: AgentState) -> Dict:
     norm_input = _normalize_text(raw_input)
 
     # 1. 闲聊 / 身份类问题
-    if _match_any(norm_input, [p.replace(".*", "") for p in CHAT_PATTERNS]) or _match_any(raw_input.lower(), CHAT_PATTERNS):
+    if any(re.fullmatch(p, norm_input) for p in CHAT_PATTERNS):
         print(f"[route_node] chat")
         return {
             "intent": "chat",
@@ -57,7 +57,7 @@ def route_node(state: AgentState) -> Dict:
         }
 
     # 2. 明显过于模糊
-    if _match_any(norm_input, [p.replace(".*", "") for p in UNCLEAR_PATTERNS]) or len(norm_input) <= 2:
+    if not state.get('chat_history') and (_match_any(norm_input, UNCLEAR_PATTERNS) or len(norm_input) <= 2):
         print(f"[route_node] unclear")
         return {
             "intent": "unclear",

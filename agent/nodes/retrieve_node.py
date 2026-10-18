@@ -6,7 +6,7 @@ from agent.state.agent_state import AgentState
 from configs import model_config
 
 
-def build_retrieve_node():
+def build_retrieve_node(search_handler=None):
     """
     通过已注册的 report_search 原子工具执行普通或结构化检索。
     """
@@ -18,7 +18,8 @@ def build_retrieve_node():
         task_type = structured_query.get("task_type", "")
 
         query = state_rewritten_query or user_input
-        outcome = call_lifecycle.execute_registered(
+        execute = call_lifecycle.execute_registered if search_handler is None else lambda tool,args,**kw: call_lifecycle.execute(tool,search_handler,args,**kw)
+        outcome = execute(
             "report_search",
             {
                 "query": query,

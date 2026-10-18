@@ -47,7 +47,6 @@ data/
 dataset/
 docs/
 files/
-git push -f origin main
 # 日志 & 缓存
 logs/
 log/
@@ -56,4 +55,12 @@ tmp/
 temp/
 #项目解析
 .ua/
+runtime/
+!docker/frontend/tsconfig.json
 金融RAG简历逐句三问.md
+docker/frontend/test-artifacts/
+*.sqlite3*
+# Local planning and historical milestone notes; publish current integration docs.
+product/*
+!product/Integration.md
+!product/Single_Knowledge_Base.md

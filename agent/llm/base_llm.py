@@ -35,6 +35,11 @@ def get_llm(
     tokens = max_tokens  if max_tokens  is not None else model_config.GENERATION_MAX_TOKENS
 
     if model_config.LLM_MODE == "api":
+        reasoning_options = {'max_retries': 0, 'timeout': model_config.LLM_CALL_TIMEOUT_SECONDS}
+        if model_config.LLM_REASONING_EFFORT:
+            reasoning_options["reasoning_effort"] = model_config.LLM_REASONING_EFFORT
+        if streaming:
+            reasoning_options.update(stream_usage=True)
         return ChatOpenAI(
             model=model_config.LLM_MODEL_NAME,
             temperature=temp,
@@ -42,6 +47,7 @@ def get_llm(
             streaming=streaming,
             openai_api_key=model_config.OPENAI_API_KEY,
             openai_api_base=model_config.OPENAI_BASE_URL,
+            **reasoning_options,
         )
 
     elif model_config.LLM_MODE == "local":

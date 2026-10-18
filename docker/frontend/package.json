@@ -4,18 +4,30 @@
   "version": "0.0.0",
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.18.0"
   },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vue-tsc --noEmit && vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "preview": "vite preview",
+    "test": "node --test tests/core.test.js",
+    "test:e2e": "playwright test",
+    "test:live": "node scripts/verify-single-workspace.mjs",
+    "test:integration": "node scripts/verify-integration.mjs"
   },
   "dependencies": {
+    "dompurify": "^3.4.17",
+    "markdown-it": "^15.0.3",
+    "pdfjs-dist": "^6.4.299",
     "vue": "^3.5.32"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/markdown-it": "^14.2.0",
     "@vitejs/plugin-vue": "^6.0.6",
-    "vite": "^8.0.10"
+    "typescript": "~5.9.3",
+    "vite": "^8.0.10",
+    "vue-tsc": "^3.3.13"
   }
 }

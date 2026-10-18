@@ -18,6 +18,7 @@ class AgentState(TypedDict, total=False):
     # 输入
     user_input: str
     session_id: str
+    prepare_only: bool  # v2 reuses retrieval/recovery, deferring generation and history commit
 
     # 多轮上下文
     chat_history: List[BaseMessage]

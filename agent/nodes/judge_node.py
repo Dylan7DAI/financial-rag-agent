@@ -2,6 +2,7 @@
 from typing import Dict
 
 from agent.state.agent_state import AgentState
+from configs import rag_config
 
 
 def judge_node(state: AgentState) -> Dict:
@@ -28,8 +29,11 @@ def judge_node(state: AgentState) -> Dict:
     print(f"[judge_node] top1_file = {top1.get('file_name', '')}")
 
     # 只有当 score 真的存在时，才做阈值判断
-    if top1_score is not None:
-        if isinstance(top1_score, (int, float)) and top1_score < 0.3:
+    # RRF is a rank-fusion weight, not the legacy reranker score or a
+    # correctness probability. Never apply the legacy 0.3 threshold to it.
+    score_kind = (top1.get('metadata') or {}).get('score_kind')
+    if top1_score is not None and score_kind != 'rrf':
+        if isinstance(top1_score, (int, float)) and top1_score < rag_config.JUDGE_MIN_SCORE:
             return {
                 "retrieval_success": False,
                 "fallback_reason": f"检索结果相关性过低（top1 score={top1_score:.4f}）。",

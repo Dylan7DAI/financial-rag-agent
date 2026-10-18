@@ -31,7 +31,8 @@ class FinancialAtomicTools:
         use_reranker: bool = True,
     ) -> Dict[str, Any]:
         structured_query = structured_query or None
-        if structured_query and structured_query.get("task_type") != "fact":
+        if structured_query and (structured_query.get("task_type") != "fact" or len(structured_query.get('sub_queries',[]))>1
+            or any(structured_query.get(key) for key in ('filters','required_terms','exclude_terms'))):
             result = self.structured_rag_adapter.search(
                 structured_query,
                 mode=mode,

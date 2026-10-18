@@ -7,6 +7,8 @@ import json
 import random
 import re
 import time
+import threading
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from enum import Enum
@@ -213,6 +215,12 @@ class CallOutcome:
     observation: CallObservation
 
 
+class StreamCallError(RuntimeError):
+    def __init__(self, observation):
+        self.observation = observation
+        super().__init__(friendly_error_message(observation.model_dump()))
+
+
 def validate_structured_query(payload: Dict[str, Any], original_query: str) -> Dict[str, Any]:
     """用可信原问题覆盖模型输出，并进行严格、禁止额外字段的校验。"""
     if not isinstance(payload, dict):
@@ -269,6 +277,7 @@ class CallLifecycle:
             else model_config.CALL_BACKOFF_MAX_SECONDS
         )
         concurrency = max_concurrency or model_config.CALL_MAX_CONCURRENCY
+        self._capacity = threading.BoundedSemaphore(max(1, concurrency))
         self._executor = ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="call-lifecycle")
         for spec in specs or _default_specs():
             self.register(spec)
@@ -366,7 +375,7 @@ class CallLifecycle:
         attempts = 0
         while attempts < max(1, spec.max_attempts):
             attempts += 1
-            future = self._executor.submit(func, **validated_args)
+            future = self._executor.submit(self._invoke_bounded, func, validated_args)
             try:
                 value = future.result(timeout=spec.timeout_seconds)
                 empty = is_empty(value) if is_empty else _default_is_empty(value)
@@ -424,6 +433,63 @@ class CallLifecycle:
             attempts=attempts,
             retryable=False,
         )
+
+    async def stream(self, tool, func, args, on_observation=None):
+        """Bounded async token calls. Retry only before any text was emitted.
+
+        Once a draft is visible a transport failure is terminal; citation repair is
+        a separate bounded invocation whose draft reset is explicit in the protocol.
+        """
+        started = time.monotonic()
+        spec = self._specs.get(tool)
+        if spec is None:
+            raise StreamCallError(self._failure(tool, ErrorType.TOOL_NOT_FOUND, '未注册', started, attempts=0, retryable=False).observation)
+        if spec.risk_level != RiskLevel.MODEL:
+            raise StreamCallError(self._failure(tool, ErrorType.RISK_DENIED, '流式入口仅允许模型调用', started, attempts=0, retryable=False).observation)
+        try:
+            validated = _model_values(spec.args_model.model_validate(args, strict=True))
+        except (ValidationError, TypeError, ValueError) as error:
+            raise StreamCallError(self._failure(tool, ErrorType.INVALID_ARGUMENTS, _error_summary(error), started, attempts=0, retryable=False).observation)
+        async with self._stream_slot(spec, started):
+            for attempt in range(1, max(1, spec.max_attempts) + 1):
+                emitted = False
+                try:
+                    async with asyncio.timeout(spec.timeout_seconds):
+                        iterator = func(**validated)
+                        try:
+                            async for chunk in iterator:
+                                if str(getattr(chunk, 'content', '') or ''): emitted = True
+                                yield chunk
+                        finally:
+                            if hasattr(iterator, 'aclose'): await iterator.aclose()
+                    observation = CallObservation(tool=tool, status='success', result={'streamed': True},
+                        attempts=attempt, duration_ms=_duration_ms(started))
+                    if on_observation: on_observation(observation.model_dump())
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    kind = classify_error(error)
+                    if not emitted and kind in _TRANSIENT_ERRORS and attempt < spec.max_attempts:
+                        await asyncio.sleep(_retry_after_seconds(error) or self._backoff(attempt))
+                        continue
+                    observation = self._failure(tool, kind, _error_summary(error), started, attempts=attempt, retryable=False).observation
+                    if on_observation: on_observation(observation.model_dump())
+                    raise StreamCallError(observation) from error
+
+    def _invoke_bounded(self, func, args):
+        with self._capacity:
+            return func(**args)
+
+    @asynccontextmanager
+    async def _stream_slot(self, spec, started):
+        # The same permit pool bounds synchronous tools and async generation.
+        while not self._capacity.acquire(blocking=False):
+            if time.monotonic() - started >= spec.timeout_seconds:
+                raise StreamCallError(self._failure(spec.name, ErrorType.TIMEOUT, '等待调用配额超时', started, attempts=0, retryable=False).observation)
+            await asyncio.sleep(.02)
+        try: yield
+        finally: self._capacity.release()
 
     def _failure(
         self,

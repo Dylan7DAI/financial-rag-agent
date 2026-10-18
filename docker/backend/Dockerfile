@@ -11,7 +11,7 @@ COPY main.py ./main.py
 COPY agent ./agent
 COPY rag ./rag
 COPY configs ./configs
-COPY docker/backend/api.py ./docker/backend/api.py
+COPY docker/backend ./docker/backend
 
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \

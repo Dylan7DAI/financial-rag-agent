@@ -47,7 +47,7 @@ __user_input__
 """
 
 
-def rewrite_node(state: AgentState) -> Dict:
+def rewrite_node(state: AgentState, *, llm_factory=get_llm) -> Dict:
     user_input = (state.get("user_input") or "").strip()
     history = state.get("chat_history", [])
 
@@ -77,8 +77,8 @@ def rewrite_node(state: AgentState) -> Dict:
             debug_info=state.get("debug_info", {}),
             rewrite_mode="direct",
         )
-    '''
-    # 3) 轻度上下文依赖：规则改写
+    # Short follow-ups reuse only the preceding question, avoiding an extra
+    # model call and preventing old answer text from becoming search evidence.
     if _need_rule_rewrite(user_input, history):
         print("[rewrite_node] 问题需要规则改写")
         rewritten_query = _simple_rewrite(user_input, history)
@@ -92,11 +92,9 @@ def rewrite_node(state: AgentState) -> Dict:
             debug_info=state.get("debug_info", {}),
             rewrite_mode="rule",
         )
-    '''
     # 2) 复杂问题：通过统一生命周期调用 LLM
     history_text = _format_history_for_rewrite(history)
-    print(f"[rewrite_node] 调用 LLM 进行改写，历史文本: {history_text}")
-    llm = get_llm()
+    llm = llm_factory()
     messages = [
         SystemMessage(content=QUERY_REWRITE_SYSTEM_PROMPT),
         HumanMessage(
@@ -263,7 +261,7 @@ def _need_rule_rewrite(user_input: str, history: List[SystemMessage]) -> bool:
     text = user_input.strip()
 
     # 过长、信息完整的问题，通常不需要规则改写
-    if len(text) >= 25 and _looks_self_contained(text):
+    if _looks_self_contained(text) or any(term in text for term in ('比较','对比','汇总','排除','不包括')):
         return False
 
     # 1. 明显代词 / 指代
@@ -350,9 +348,14 @@ def _simple_rewrite(user_input: str, history: List) -> str:
     if not last_user_query:
         return user_input
 
-    pronouns = ["它", "这家公司", "那家", "其", "该公司", "这个", "那个", "前者", "后者", "同比", "环比", "相比"]
-
-    if any(p in user_input for p in pronouns):
-        return f"{last_user_query} {user_input}".strip()
-
-    return user_input
+    # A new explicit year supersedes the preceding year. Keep a compact subject
+    # prefix instead of ranking the old question's year/extra metrics again.
+    if re.search(r'(?:19|20)\d{2}',user_input):
+        subject=re.split(r'(?:19|20)\d{2}|营业收入|营收|净利润|毛利率|主营业务',last_user_query,maxsplit=1)[0].strip()
+        if subject and len(subject)<=60:
+            if not re.search(r'收入|营收|利润|利率|业务|成本|现金流|估值|资产|负债|研发|销量|产能',user_input):
+                year=re.search(r'(?:19|20)\d{2}',user_input)[0]
+                return re.sub(r'(?:19|20)\d{2}',year,last_user_query)+'\n'+user_input
+            question=re.sub(r'^(?:那么|那|还有|另外)\s*','',user_input)
+            return f'{subject} {question}'
+    return f"{last_user_query}\n{user_input}".strip()

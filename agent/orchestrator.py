@@ -26,6 +26,7 @@ Graph 结构：
 """
 import json
 import sys
+from functools import partial
 from pathlib import Path
 from typing import List, Optional
 
@@ -76,12 +77,28 @@ class FinancialRAGAgent:
         print("[Agent] 正在加载向量库...")
         vectorstore = load_vector_store(vs_path)
         all_documents = self._load_all_documents(docs_path)
-        self.search_fn = create_hybrid_retriever(
+        search_fn = create_hybrid_retriever(
             vectorstore, all_documents
         )  # 这里search_fn已经变成了内部函数search，封装了向量检索、BM25检索和Reranker的完整流程
         print(f"[Agent] 向量库加载完成，共 {len(all_documents)} 个文档块。")
 
-        # 2. 创建 RAG Adapter
+        self._configure(search_fn, all_documents, max_turns=max_turns, max_retries=max_retries)
+        self.embeddings = vectorstore.embeddings
+
+    @classmethod
+    def from_retriever(cls, search_fn, documents, *, llm_factory=get_llm, max_retries=None):
+        """Use the same graph/tools with an injected, immutable corpus.
+
+        Web requests never load the CLI index or register process-global handlers.
+        """
+        agent = cls.__new__(cls)
+        agent._configure(search_fn, documents, llm_factory=llm_factory, max_retries=max_retries)
+        return agent
+
+    def _configure(self, search_fn, documents, *, max_turns=10, max_retries=None, llm_factory=get_llm):
+        self.search_fn = search_fn
+        self.llm_factory = llm_factory
+        all_documents = list(documents)
         self.rag_adapter = create_rag_search_adapter(self.search_fn)  # 将底层search函数封装成python接口
         self.structured_rag_adapter = create_structured_rag_search_adapter(self.search_fn)  # 为结构化检索创建独立的适配器
         self.atomic_tools = FinancialAtomicTools(
@@ -89,14 +106,12 @@ class FinancialRAGAgent:
             self.structured_rag_adapter,
             all_documents,
         )
-        for tool_name, handler in self.atomic_tools.handlers().items():
-            call_lifecycle.register_handler(tool_name, handler)
+        self.handlers = self.atomic_tools.handlers()
 
         # 3. 对话历史
         self.memory = ChatHistoryManager(max_turns=max_turns)
 
         # 4. 默认 LLM（节点内也可直接 get_llm）
-        self.llm = get_llm()
         self.max_retries = (
             model_config.EMPTY_RESULT_RETRY_LIMIT
             if max_retries is None
@@ -136,6 +151,8 @@ class FinancialRAGAgent:
 
         # ---node 2：save_history, 在 answer_node 和 fallback_node 之后执行，负责把本轮对话（用户输入 + 模型回答）保存到历史中
         def save_history_node(state: AgentState) -> dict:
+            if state.get("prepare_only"):
+                return {}
             session_id = state["session_id"]
             user_input = state["user_input"]
             answer = state.get("answer", "").strip()
@@ -151,17 +168,17 @@ class FinancialRAGAgent:
             return {}
 
         # --- other node ---
-        retrieve_node = build_retrieve_node()
-        answer_node = build_answer_node(self.memory)
+        retrieve_node = build_retrieve_node(self.handlers['report_search'])
+        answer_node = build_answer_node(self.memory, llm_factory=self.llm_factory)
 
         # 先加节点
         workflow.add_node("load_history", load_history_node)
         workflow.add_node("route", route_node)
-        workflow.add_node("rewrite", rewrite_node)
+        workflow.add_node("rewrite", partial(rewrite_node, llm_factory=self.llm_factory))
         workflow.add_node("retrieve", retrieve_node)
         workflow.add_node("judge", judge_node)
         workflow.add_node("ans", answer_node)
-        workflow.add_node("recovery", recovery_node)
+        workflow.add_node("recovery", partial(recovery_node, llm_factory=self.llm_factory))
         workflow.add_node("fallback", fallback_node)
         workflow.add_node("save_history", save_history_node)
 
@@ -238,7 +255,22 @@ class FinancialRAGAgent:
 
     @staticmethod
     def _route_after_answer(state: AgentState) -> str:
+        if state.get("prepare_only"):
+            return "save_history"
         return "save_history" if state.get("answer", "").strip() else "recovery"
+
+    async def prepare_v2(self, user_input: str, session_id: str, history):
+        """Use existing route/rewrite/retrieve/judge/recovery budgets without generating twice."""
+        messages = []
+        for question, answer in history:
+            messages.extend([HumanMessage(content=question), AIMessage(content=answer)])
+        self.memory.replace(session_id, messages)
+        return await self.graph.ainvoke({
+            "user_input": user_input, "session_id": session_id, "prepare_only": True,
+            "argument_repair_count": 0, "generalization_count": 0,
+            "argument_repair_limit": model_config.ARGUMENT_REPAIR_LIMIT,
+            "generalization_limit": self.max_retries, "observations": [], "debug_info": {},
+        })
 
     @staticmethod
     def _route_after_recovery(state: AgentState) -> str:
@@ -246,7 +278,7 @@ class FinancialRAGAgent:
 
     def list_tools(self) -> List[Dict[str, Any]]:
         """返回已注册且可通过生命周期管理器调用的业务工具。"""
-        return [tool for tool in call_lifecycle.list_registered_tools() if tool["ready"]]
+        return [{**tool, 'ready': True} for tool in call_lifecycle.list_registered_tools() if tool['name'] in self.handlers]
 
     def invoke_tool(self, tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """供编排层或测试直接调用已注册的原子工具。"""
@@ -265,8 +297,11 @@ class FinancialRAGAgent:
                 "unit": (value or {}).get("unit"),
             },
         }
-        outcome = call_lifecycle.execute_registered(
+        if tool not in self.handlers:
+            raise ValueError('未知工具')
+        outcome = call_lifecycle.execute(
             tool,
+            self.handlers[tool],
             arguments,
             argument_retryable=False,
             empty_retryable=False,
@@ -313,7 +348,7 @@ class FinancialRAGAgent:
             )
             for d in data
         ]
-    
+
     # ------------------------------
     # 【新增】流式输出 支持：答案 + 引用 + 证据】
     # ------------------------------
@@ -348,21 +383,21 @@ class FinancialRAGAgent:
                 }
 
             # 2. 输出证据（检索到的 chunks）
-            if "contexts" in data and data["contexts"]:
+            if data.get("retrieved_docs"):
                 evidences = []
-                for idx, doc in enumerate(data["contexts"]):
+                for idx, doc in enumerate(data["retrieved_docs"]):
                     evidences.append({
                         "id": idx,
-                        "page": doc.metadata.get("page", "未知"),
-                        "pdf": doc.metadata.get("source", "文档"),
-                        "content": doc.page_content,
-                        "score": doc.metadata.get("score", 0.0)
+                        "page": doc.get("page_num", "未知"),
+                        "pdf": doc.get("file_name", "文档"),
+                        "content": doc.get("content", ""),
+                        "score": float(doc.get("score") or 0.0)
                     })
                 yield {
                     "type": "evidences",
                     "list": evidences
                 }
-                
+
     def eval_chat(self, user_input: str, session_id: str = "ragas_eval") -> dict:
         """
         Ragas 评测专用接口。
@@ -386,7 +421,9 @@ class FinancialRAGAgent:
             }
         )
 
-        context_docs = result.get("contexts", []) or []
+        # Graph retrieval contract is retrieved_docs (normalized dicts), not contexts.
+        context_docs = [Document(page_content=d.get('content', ''), metadata={k:v for k,v in d.items() if k!='content'})
+                        for d in result.get('retrieved_docs', [])]
 
         return {
             "answer": result.get("answer", "抱歉，未能生成回答。"),
@@ -398,71 +435,3 @@ class FinancialRAGAgent:
             "observations": result.get("observations", []),
             "debug_info": result.get("debug_info", {}),
         }
-
-
-if __name__ == "__main__":
-    """
-    本地调试入口：
-    直接运行 python agent/orchestrator.py
-    """
-
-    import traceback
-    import time
-
-    print("=" * 80)
-    print("FinancialRAGAgent 本地调试启动")
-    print("=" * 80)
-
-    try:
-        agent = FinancialRAGAgent()  # 实例化 Agent，加载向量库和模型，构建图create graph
-
-        test_session_id = "debug_session"
-
-        # 你可以先放几个固定测试问题
-        test_questions = [
-            "海光信息2024年净利润是多少？",
-            "对比一下海光信息和上海航天汽车机电公司的财务表现",
-            "那同比增速呢？",
-            "你好，你是什么模型？请介绍你的版本",
-        ]
-
-        for i, question in enumerate(test_questions, 1):
-            print("\n" + "-" * 80)
-            print(f"[Round {i}] 用户问题: {question}")
-            print("-" * 80)
-
-            answer = agent.chat(question, session_id=test_session_id)  # 调用chat交给大模型输出答案
-
-            print("[Agent Answer]")
-            print(answer)
-
-            time.sleep(3)
-
-        print("\n" + "=" * 80)
-        print("多轮固定问题测试完成")
-        print("=" * 80)
-
-        # 可选：进入交互式调试
-        print("\n进入交互模式，输入 quit / exit 退出。\n")
-
-        while True:
-            user_input = input("User> ").strip()
-            if user_input.lower() in {"quit", "exit"}:
-                print("已退出调试模式。")
-                break
-
-            if not user_input:
-                continue
-
-            answer = agent.chat(user_input, session_id=test_session_id)
-
-            print("\nAssistant>")
-            print(answer)
-            print()
-
-    except Exception as e:
-        print("\n[ERROR] Agent 调试运行失败")
-        print(f"错误类型: {type(e).__name__}")
-        print(f"错误信息: {e}")
-        print("\n详细堆栈如下：")
-        traceback.print_exc()
